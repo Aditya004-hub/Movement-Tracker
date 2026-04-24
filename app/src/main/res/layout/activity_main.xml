@@ -86,4 +86,14 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"/>
 
+    <Button
+        android:id="@+id/stopButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Stop Tracking"
+        android:layout_marginTop="16dp"
+        android:backgroundTint="#FF5252"
+        android:textColor="@android:color/white"/>
+
+
 </LinearLayout>

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
+import android.os.Build;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.TextView;
@@ -24,7 +25,7 @@ import java.util.Locale;
 public class MainActivity extends AppCompatActivity {
 
     TextView latitudeText, longitudeText, locationNameText;
-    Button historyButton;
+    Button historyButton, stopButton;
 
     FusedLocationProviderClient fusedLocationProviderClient;
     LocationRequest locationRequest;
@@ -33,6 +34,8 @@ public class MainActivity extends AppCompatActivity {
     DatabaseHelper dbHelper;
 
     String lastLocationName = "";
+    double lastLat = 0.0;
+    double lastLon = 0.0;
     long startTime = 0;
 
     @Override
@@ -44,15 +47,19 @@ public class MainActivity extends AppCompatActivity {
         longitudeText = findViewById(R.id.longitudeText);
         locationNameText = findViewById(R.id.locationNameText);
         historyButton = findViewById(R.id.historyButton);
+        stopButton = findViewById(R.id.stopButton);
 
         dbHelper = new DatabaseHelper(this);
 
         fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
 
-        historyButton.setOnClickListener(v -> {
-            Intent intent = new Intent(MainActivity.this, HistoryActivity.class);
-            startActivity(intent);
-        });
+        historyButton.setOnClickListener(v ->
+                startActivity(new Intent(MainActivity.this, HistoryActivity.class))
+        );
+
+        stopButton.setOnClickListener(v ->
+                stopService(new Intent(MainActivity.this, LocationService.class))
+        );
 
         locationRequest = LocationRequest.create();
         locationRequest.setInterval(2000);
@@ -63,6 +70,8 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onLocationResult(LocationResult locationResult) {
 
+                if (locationResult == null) return;
+
                 Location location = locationResult.getLastLocation();
                 if (location == null) return;
 
@@ -72,94 +81,162 @@ public class MainActivity extends AppCompatActivity {
                 latitudeText.setText("Latitude: " + latitude);
                 longitudeText.setText("Longitude: " + longitude);
 
-                Geocoder geocoder = new Geocoder(MainActivity.this, Locale.getDefault());
-
-                try {
-
-                    List<Address> addresses = geocoder.getFromLocation(latitude, longitude, 1);
-
-                    if (addresses != null && !addresses.isEmpty()) {
-
-                        Address address = addresses.get(0);
-
-                        String street = address.getThoroughfare();
-                        String city = address.getLocality();
-                        String state = address.getAdminArea();
-
-                        StringBuilder locationBuilder = new StringBuilder();
-
-                        if (street != null && !street.isEmpty()) {
-                            locationBuilder.append(street);
-                        }
-
-                        if (city != null && !city.isEmpty()) {
-                            if (locationBuilder.length() > 0) locationBuilder.append(", ");
-                            locationBuilder.append(city);
-                        }
-
-                        if (state != null && !state.isEmpty()) {
-                            if (locationBuilder.length() > 0) locationBuilder.append(", ");
-                            locationBuilder.append(state);
-                        }
-
-                        String locationName = locationBuilder.toString();
-
-                        if (locationName.isEmpty()) {
-                            locationName = "Unknown Location";
-                        }
-
-                        locationNameText.setText(locationName);
-
-                        // Save only when location changes
-                        if (!locationName.equals(lastLocationName)) {
-
-                            long endTime = System.currentTimeMillis();
-
-                            if (!lastLocationName.equals("")) {
-                                dbHelper.insertLocation(
-                                        lastLocationName,
-                                        formatTime(startTime),
-                                        formatTime(endTime)
-                                );
-                            }
-
-                            lastLocationName = locationName;
-                            startTime = System.currentTimeMillis();
-                        }
-                    }
-
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                getAddressAndStore(latitude, longitude);
             }
         };
 
         requestPermission();
     }
 
+    // ✅ Step 1: Ask only FINE LOCATION
     private void requestPermission() {
 
         if (ActivityCompat.checkSelfPermission(this,
                 Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
 
             ActivityCompat.requestPermissions(this,
-                    new String[]{
-                            Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION
-                    }, 1);
+                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                    1);
 
         } else {
+            startLocationUpdates();
+            startBackgroundService();
+        }
+    }
 
-            fusedLocationProviderClient.requestLocationUpdates(
-                    locationRequest,
-                    locationCallback,
-                    null
-            );
+    // ✅ Step 2: Handle permission result properly
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == 1) {
+
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+                startLocationUpdates();
+                startBackgroundService();
+
+                // ✅ Step 3: Ask background permission separately
+                requestBackgroundPermission();
+            }
+        }
+    }
+
+    // ✅ Start Foreground Service
+    private void startBackgroundService() {
+
+        Intent serviceIntent = new Intent(this, LocationService.class);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
+    }
+
+    // ✅ Step 3: Ask BACKGROUND LOCATION separately
+    private void requestBackgroundPermission() {
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
+            if (ActivityCompat.checkSelfPermission(this,
+                    Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION},
+                        2);
+            }
+        }
+    }
+
+    private void startLocationUpdates() {
+
+        if (ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        fusedLocationProviderClient.requestLocationUpdates(
+                locationRequest,
+                locationCallback,
+                null
+        );
+    }
+
+    private void getAddressAndStore(double lat, double lon) {
+
+        Geocoder geocoder = new Geocoder(this, Locale.getDefault());
+
+        try {
+
+            if (!Geocoder.isPresent()) return;
+
+            List<Address> addresses = geocoder.getFromLocation(lat, lon, 1);
+
+            if (addresses != null && !addresses.isEmpty()) {
+
+                Address address = addresses.get(0);
+
+                String street = address.getThoroughfare();
+                String city = address.getLocality();
+                String state = address.getAdminArea();
+
+                StringBuilder builder = new StringBuilder();
+
+                if (street != null && !street.isEmpty()) builder.append(street);
+
+                if (city != null && !city.isEmpty()) {
+                    if (builder.length() > 0) builder.append(", ");
+                    builder.append(city);
+                }
+
+                if (state != null && !state.isEmpty()) {
+                    if (builder.length() > 0) builder.append(", ");
+                    builder.append(state);
+                }
+
+                String locationName = builder.toString();
+
+                if (locationName.isEmpty()) locationName = "Unknown Location";
+
+                locationNameText.setText(locationName);
+
+                if (!locationName.equals(lastLocationName)) {
+
+                    long endTime = System.currentTimeMillis();
+
+                    if (!lastLocationName.equals("")) {
+
+                        dbHelper.insertLocation(
+                                lastLocationName,
+                                String.valueOf(lastLat),
+                                String.valueOf(lastLon),
+                                getCurrentDate(),
+                                formatTime(startTime),
+                                formatTime(endTime)
+                        );
+                    }
+
+                    lastLocationName = locationName;
+                    lastLat = lat;
+                    lastLon = lon;
+                    startTime = System.currentTimeMillis();
+                }
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
     private String formatTime(long millis) {
-        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
-        return sdf.format(new Date(millis));
+        return new SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                .format(new Date(millis));
+    }
+
+    private String getCurrentDate() {
+        return new SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+                .format(new Date());
     }
 }

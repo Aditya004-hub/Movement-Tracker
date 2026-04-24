@@ -2,6 +2,7 @@ package com.example.movementtracker;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.os.Bundle;
@@ -14,7 +15,7 @@ public class HistoryActivity extends AppCompatActivity {
 
     ListView historyList;
     DatabaseHelper dbHelper;
-    ArrayList<String> locationHistory;
+    ArrayList<String> dateList;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -24,27 +25,23 @@ public class HistoryActivity extends AppCompatActivity {
         historyList = findViewById(R.id.historyList);
         dbHelper = new DatabaseHelper(this);
 
-        loadHistory();
+        loadDates();
     }
 
-    private void loadHistory() {
+    private void loadDates() {
 
         SQLiteDatabase db = dbHelper.getReadableDatabase();
-        Cursor cursor = db.rawQuery("SELECT * FROM location_history", null);
 
-        locationHistory = new ArrayList<>();
+        Cursor cursor = db.rawQuery(
+                "SELECT DISTINCT date FROM location_history ORDER BY date DESC LIMIT 3",
+                null
+        );
+
+        dateList = new ArrayList<>();
 
         while (cursor.moveToNext()) {
-
-            String location = cursor.getString(1);
-            String start = cursor.getString(2);
-            String end = cursor.getString(3);
-
-            String record = "📍 Location: " + location +
-                    "\n⏱ From: " + start +
-                    "\n⏱ To: " + end;
-
-            locationHistory.add(record);
+            String date = cursor.getString(0);
+            dateList.add("📁 " + date);
         }
 
         cursor.close();
@@ -52,8 +49,18 @@ public class HistoryActivity extends AppCompatActivity {
         ArrayAdapter<String> adapter =
                 new ArrayAdapter<>(this,
                         android.R.layout.simple_list_item_1,
-                        locationHistory);
+                        dateList);
 
         historyList.setAdapter(adapter);
+
+
+        historyList.setOnItemClickListener((parent, view, position, id) -> {
+
+            String selectedDate = dateList.get(position).replace("📁 ", "");
+
+            Intent intent = new Intent(HistoryActivity.this, DateHistoryActivity.class);
+            intent.putExtra("date", selectedDate);
+            startActivity(intent);
+        });
     }
 }
